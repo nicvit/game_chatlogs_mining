@@ -1,0 +1,72 @@
+---
+title: "Lockwood-Chatlogs-Network Exploration"
+output: html_notebook
+author: "Nicola Vitale"
+---
+
+General exploration of chat network of Avakin Life.
+First code for general exploration (check distributions of user interactions in time interval), then go on writing down the list of abusive situations and check some hypothesis on those.
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(magrittr)
+library(ggplot2)
+library(lubridate)
+library(grid)
+
+```
+
+```{r, echo=FALSE}
+
+print("Start of records")
+min(chatlogs$timestamp)
+print("End of records:")
+max(chatlogs$timestamp)
+
+```
+
+```{r}
+
+options(digits.secs=3)
+chatlogs = transform(chatlogs, timestamp = parse_date_time(timestamp, orders = "%Y-%m-%d %H:%M:%S"))
+
+start_window = ymd_hms("2016-07-17 14:00:00.000")
+end_window = ymd_hms("2016-07-17 14:20:00.000")
+
+chatlogs_window = filter(chatlogs, timestamp >= start_window & timestamp <= end_window)
+
+sent_count = chatlogs_window$from_id %>% table %>%  data.frame
+colnames(sent_count) = c("unique_user", "sent_count")
+
+received_count = chatlogs_window$to_id %>% table %>%  data.frame
+colnames(received_count) = c("unique_user", "received_count")
+
+users_interactions = full_join(sent_count, received_count, by = "unique_user")
+
+users_interactions[is.na(users_interactions)] = 0
+
+remove(list = c("sent_count", "received_count"))
+
+
+```
+
+
+```{r}
+
+sent_count = ggplot(data = users_interactions) +
+    geom_col(
+        mapping = aes(x = unique_user, y = sent_count)
+    )
+
+received_count = ggplot(data = users_interactions) +
+    geom_col(
+        mapping = aes(x = unique_user, y = received_count)
+    )
+
+grid.newpage()
+grid.draw(rbind(ggplotGrob(sent_count), ggplotGrob(received_count), size = "last"))
+
+
+```
+
