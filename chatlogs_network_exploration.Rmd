@@ -31,10 +31,12 @@ max(chatlogs$timestamp)
 options(digits.secs=3)
 chatlogs = transform(chatlogs, timestamp = parse_date_time(timestamp, orders = "%Y-%m-%d %H:%M:%S"))
 
+# set time window
+###
 start_window = ymd_hms("2016-07-17 14:00:00.000")
 end_window = ymd_hms("2016-07-17 14:20:00.000")
-
 chatlogs_window = filter(chatlogs, timestamp >= start_window & timestamp <= end_window)
+###
 
 sent_count = chatlogs_window$from_id %>% table %>%  data.frame
 colnames(sent_count) = c("unique_user", "sent_count")
@@ -43,8 +45,9 @@ received_count = chatlogs_window$to_id %>% table %>%  data.frame
 colnames(received_count) = c("unique_user", "received_count")
 
 users_interactions = full_join(sent_count, received_count, by = "unique_user")
-
 users_interactions[is.na(users_interactions)] = 0
+
+users_interactions = mutate(users_interactions, traffic = sent_count + received_count)
 
 remove(list = c("sent_count", "received_count"))
 
@@ -57,12 +60,15 @@ remove(list = c("sent_count", "received_count"))
 sent_count = ggplot(data = users_interactions) +
     geom_col(
         mapping = aes(x = unique_user, y = sent_count)
-    )
+    ) +
+    theme(axis.text.x=element_blank(), axis.ticks.x=element_blank())
+
 
 received_count = ggplot(data = users_interactions) +
     geom_col(
         mapping = aes(x = unique_user, y = received_count)
-    )
+    ) +
+    theme(axis.text.x=element_blank(), axis.ticks.x=element_blank())
 
 grid.newpage()
 grid.draw(rbind(ggplotGrob(sent_count), ggplotGrob(received_count), size = "last"))
