@@ -4,10 +4,27 @@ output: html_notebook
 author: "Nicola Vitale"
 ---
 
-General exploration of chat network of Avakin Life.
-First code for general exploration (check distributions of user interactions in time interval), then go on writing down the list of abusive situations and check some hypothesis on those.
+Exploration of chat network of Avakin Life game by Lockwood.
 
+Abuse situations:
+Begging
+Discrimination  (mostly towards gay people, and "gay" being used as a frequent insult)
+Being aggressively hit on
+Being insulted for what they are wearing
+Accusations of being a terrorist
+Roleplaying as a Terrorist or "Illuminati" to intimidate people.
+Suicide threats "I will kill myself if you don't buy me <item> / Be my friend"
+Threatening to report people to admin for no reason
+Threatening to hack peoples accounts
+Phishing
+
+First code for general exploration (check distributions of user interactions in time interval), 
+then go through the list of abusive situations and check some hypothesis on those.
+
+Improt required libraries.
 ```{r}
+
+library(RMySQL)
 library(dplyr)
 library(tidyr)
 library(magrittr)
@@ -17,39 +34,130 @@ library(grid)
 
 ```
 
-```{r, echo=FALSE}
+Establish connection to DB (Remember to use VPN tunnel to talk to SpiritAI server)
+```{r}
 
-print("Start of records")
-min(chatlogs$timestamp)
-print("End of records:")
-max(chatlogs$timestamp)
+monitor.db <- dbConnect(MySQL(), user="ally", password="spiritai", dbname="monitor", host="freelander")
+on.exit(dbDisconnect(con))
+
+```
+
+General DB exploration, check out:
+* Column names and types
+* Start/end time of records
+* Total number of records (messages)
+```{r}
+
+column_types <- dbSendQuery(monitor.db, "
+    SELECT
+        column_name,
+        column_type 
+    FROM information_schema.columns 
+    WHERE table_name='messages'; 
+    ")
+column_types <- fetch(column_types, n = -1)
+print(column_types)
+
+start_end_records <- dbSendQuery(monitor.db, "
+    SELECT
+        MIN(timestamp),
+        MAX(timestamp) 
+    FROM messages; 
+    ")
+start_end_records <- fetch(start_end_records, n = -1)
+print(start_end_records)
+
+tot_messages <- dbSendQuery(monitor.db, "
+    SELECT
+        COUNT(*)
+    FROM messages;
+    ")
+tot_messages <- fetch(tot_messages, n = -1)
+print(tot_messages)
+
+```
+
+MySQL DB test chunk (test here different functions)
+```{r}
+
+column_types <- dbSendQuery(monitor.db, "
+    SELECT
+        column_name AS fffffff,
+        column_type 
+    FROM information_schema.columns 
+    WHERE table_name='messages'; 
+    ")
+column_types <- fetch(column_types, n = -1)
+print(column_types)
+
+
+```
+
+
+Look at the traffic within the game, look at the number of messages sent by hour of the day, over the three days.
+```{r}
+
+sent_by_hour <- dbSendQuery(monitor.db, "
+                            SELECT
+                                DAY(timestamp) AS day,
+                                HOUR(timestamp) AS hour, 
+                                COUNT(*) AS messages_count
+                            FROM messages 
+                            GROUP BY DAY(timestamp), HOUR(timestamp);")
+sent_by_hour <- fetch(sent_by_hour, n = -1)
+print(sent_by_hour)
 
 ```
 
 ```{r}
+sent_by_hour$month <- c(07)
+sent_by_hour$year <- c(2016)
+sent_by_hour$Date <- paste(sent_by_hour$year, sent_by_hour$month, sep = "-")
+sent_by_hour$Date <- paste(sent_by_hour$Date, sent_by_hour$day, sep = "-")
+sent_by_hour$Date <- paste(sent_by_hour$Date, sent_by_hour$hour, sep = " ")
+sent_by_hour$Date <- ymd_h(sent_by_hour$Date)
 
-options(digits.secs=3)
-chatlogs = transform(chatlogs, timestamp = parse_date_time(timestamp, orders = "%Y-%m-%d %H:%M:%S"))
+
+```
+
+
+```{r}
+ 
+
+ggplot(sent_by_hour, aes(x = Date, y = messages_count)) +
+       geom_point() + geom_line()
+```
+
+
+
+
+
+
+Organise the data and compute: 
+* total interactions between users 
+* check peaks of sent messages in the whole records.
+__Note:__ select a sensible the __time window__ using MySQL DB query over "timestamp".
+```{r}
 
 # set time window
 ###
-start_window = ymd_hms("2016-07-17 14:00:00.000")
-end_window = ymd_hms("2016-07-17 14:20:00.000")
-chatlogs_window = filter(chatlogs, timestamp >= start_window & timestamp <= end_window)
+start_window <- ymd_hms("2016-07-17 14:00:00.000")
+end_window <- ymd_hms("2016-07-17 14:20:00.000")
+chatlogs_window <- filter(chatlogs, timestamp >= start_window & timestamp <= end_window)
 ###
 
-sent_count = chatlogs_window$from_id %>% table %>%  data.frame
-colnames(sent_count) = c("unique_user", "sent_count")
+sent_count <- chatlogs_window$from_id %>% table %>%  data.frame
+colnames(sent_count) <- c("unique_user", "sent_count")
 
-received_count = chatlogs_window$to_id %>% table %>%  data.frame
-colnames(received_count) = c("unique_user", "received_count")
+received_count <- chatlogs_window$to_id %>% table %>%  data.frame
+colnames(received_count) <- c("unique_user", "received_count")
 
-users_interactions = full_join(sent_count, received_count, by = "unique_user")
-users_interactions[is.na(users_interactions)] = 0
+users_interactions <- full_join(sent_count, received_count, by = "unique_user")
+users_interactions[is.na(users_interactions)] <- 0
 
-users_interactions = mutate(users_interactions, traffic = sent_count + received_count)
+users_interactions <- mutate(users_interactions, traffic = sent_count + received_count)
 
-remove(list = c("sent_count", "received_count"))
+remove(list = c("sent_count", "received_count"))  <- 
 
 
 ```
@@ -57,18 +165,25 @@ remove(list = c("sent_count", "received_count"))
 
 ```{r}
 
-sent_count = ggplot(data = users_interactions) +
+sent_mean <- mean(users_interactions$sent_count)
+sent_count <- ggplot(data = users_interactions) +
     geom_col(
         mapping = aes(x = unique_user, y = sent_count)
     ) +
+    geom_hline(
+        mapping = aes(yintercept = sent_mean, colour = "red")
+    ) +
     theme(axis.text.x=element_blank(), axis.ticks.x=element_blank())
 
-
+received_mean <- mean(users_interactions$received_count)
 received_count = ggplot(data = users_interactions) +
     geom_col(
         mapping = aes(x = unique_user, y = received_count)
     ) +
-    theme(axis.text.x=element_blank(), axis.ticks.x=element_blank())
+    geom_hline(
+        mapping = aes(yintercept = received_mean, colour = "red")
+    ) +
+    theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
 
 grid.newpage()
 grid.draw(rbind(ggplotGrob(sent_count), ggplotGrob(received_count), size = "last"))
