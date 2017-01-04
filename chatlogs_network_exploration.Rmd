@@ -1,5 +1,5 @@
 ---
-title: "Lockwood-Chatlogs-Network Exploration"
+title: "Lockwood-chatlogs_window-Network Exploration"
 output: html_notebook
 author: "Nicola Vitale"
 ---
@@ -30,7 +30,14 @@ library(tidyr)
 library(magrittr)
 library(ggplot2)
 library(lubridate)
+options(digits.secs = 3)
 library(grid)
+library(gridExtra)
+library(igraph)
+library(edgebundleR)
+library(poweRlaw)
+library(text2vec)
+library(LDAvis)
 
 ```
 
@@ -38,7 +45,7 @@ Establish connection to DB (Remember to use VPN tunnel to talk to SpiritAI serve
 ```{r}
 
 monitor.db <- dbConnect(MySQL(), user="ally", password="spiritai", dbname="monitor", host="freelander")
-on.exit(dbDisconnect(con))
+on.exit(dbDisconnect(monitor.db))
 
 ```
 
@@ -75,9 +82,12 @@ tot_messages <- dbSendQuery(monitor.db, "
 tot_messages <- fetch(tot_messages, n = -1)
 print(tot_messages)
 
+dbDisconnect(monitor.db)
+
 ```
 
-MySQL DB test chunk (test here different functions)
+##############################################################
+MySQL DB TEST-CHUNK (test here different functions)
 ```{r}
 
 column_types <- dbSendQuery(monitor.db, "
@@ -88,11 +98,11 @@ column_types <- dbSendQuery(monitor.db, "
     WHERE table_name='messages'; 
     ")
 column_types <- fetch(column_types, n = -1)
-print(column_types)
+print(column_types) 
 
 
 ```
-
+###############################################################
 
 Look at the traffic within the game, look at the number of messages sent by hour of the day, over the three days.
 ```{r}
@@ -117,34 +127,29 @@ sent_by_hour$Date <- paste(sent_by_hour$Date, sent_by_hour$day, sep = "-")
 sent_by_hour$Date <- paste(sent_by_hour$Date, sent_by_hour$hour, sep = " ")
 sent_by_hour$Date <- ymd_h(sent_by_hour$Date)
 
-
-```
-
-
-```{r}
- 
-
 ggplot(sent_by_hour, aes(x = Date, y = messages_count)) +
-       geom_point() + geom_line()
+       geom_point() + geom_line() + theme_minimal()
 ```
 
-
-
-
-
-
-Organise the data and compute: 
-* total interactions between users 
-* check peaks of sent messages in the whole records.
+Organise the data and compute:
+* total interactions per user
+* distribution of contacts per each user
 __Note:__ select a sensible the __time window__ using MySQL DB query over "timestamp".
 ```{r}
 
 # set time window
 ###
-start_window <- ymd_hms("2016-07-17 14:00:00.000")
-end_window <- ymd_hms("2016-07-17 14:20:00.000")
-chatlogs_window <- filter(chatlogs, timestamp >= start_window & timestamp <= end_window)
+start_window <- ymd_hms("2016-07-17 20:59:00.000")
+end_window <- ymd_hms("2016-07-17 21:00:59.000")
+prepare_query <- sprintf("SELECT * FROM messages WHERE timestamp BETWEEN '%s' AND '%s';", start_window, end_window)
+chatlogs_window <- dbSendQuery(monitor.db, prepare_query)
+chatlogs_window <- fetch(chatlogs_window, n = -1)
 ###
+
+```
+
+```{r}
+
 
 sent_count <- chatlogs_window$from_id %>% table %>%  data.frame
 colnames(sent_count) <- c("unique_user", "sent_count")
@@ -157,7 +162,7 @@ users_interactions[is.na(users_interactions)] <- 0
 
 users_interactions <- mutate(users_interactions, traffic = sent_count + received_count)
 
-remove(list = c("sent_count", "received_count"))  <- 
+remove(list = c("sent_count", "received_count"))
 
 
 ```
@@ -165,29 +170,118 @@ remove(list = c("sent_count", "received_count"))  <-
 
 ```{r}
 
-sent_mean <- mean(users_interactions$sent_count)
 sent_count <- ggplot(data = users_interactions) +
     geom_col(
         mapping = aes(x = unique_user, y = sent_count)
     ) +
-    geom_hline(
-        mapping = aes(yintercept = sent_mean, colour = "red")
-    ) +
     theme(axis.text.x=element_blank(), axis.ticks.x=element_blank())
 
-received_mean <- mean(users_interactions$received_count)
-received_count = ggplot(data = users_interactions) +
+received_count <- ggplot(data = users_interactions) +
     geom_col(
         mapping = aes(x = unique_user, y = received_count)
     ) +
-    geom_hline(
-        mapping = aes(yintercept = received_mean, colour = "red")
+    theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+
+user_traffic <-  ggplot(data = users_interactions) +
+    geom_col(
+        mapping = aes(x = unique_user, y = received_count)
     ) +
     theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
 
-grid.newpage()
-grid.draw(rbind(ggplotGrob(sent_count), ggplotGrob(received_count), size = "last"))
+sent_count
+received_count
+user_traffic
 
+```
+
+Model interactions with igraph 
+
+```{r}
+
+prv_messages_df <- chatlogs_window %>% dplyr::filter(type == "prvMsg")
+prv_messages_net <- graph_from_data_frame(prv_messages_df[, c("from_id", "to_id")], directed = FALSE)
+
+pblc_messages_df <- chatlogs_window %>% dplyr::filter(type == "pubMsg")
+pblc_messages_net <- graph_from_data_frame(pblc_messages_df[, c("from_id", "to_id")], directed = FALSE)
+
+
+```
+```{r}
+
+edgebundle(prv_messages_net, tension = 0.2, cutoff = 0.7, fontsize = 5, padding = 100, nodesize = 0.9)
+
+```
+
+
+Query for total messages sent by usersover the 3 days
+```{r}
+
+monitor.db <- dbConnect(MySQL(), user="ally", password="spiritai", dbname="monitor", host="freelander")
+prepare_query <- sprintf("SELECT from_id, COUNT(from_id) FROM messages GROUP BY from_id;")
+users_sent_totals <- dbSendQuery(monitor.db, prepare_query)
+users_sent_totals <- fetch(users_sent_totals, n = -1)
+remove(monitor.db)
+
+```
+
+```{r}
+
+sent_count <- ggplot(data = users_sent_totals[1:100000,]) +
+    geom_histogram(
+        mapping = aes(x = `COUNT(from_id)`), binwidth = 1
+    ) +
+    scale_y_log10(limits = c(1, 1e2))
+
+sent_count
+
+```
+
+```{r}
+
+sent_count <- ggplot(data = users_sent_totals) +
+    geom_histogram(
+        mapping = aes(x = `COUNT(from_id)`)
+    ) +
+    scale_x_continuous(limits = c(900, 3000))
+
+sent_count
+
+
+```
+
+Extract most used stemmed tokens by a single player or by a group of players.
+* try with the user that sent most messages
+
+```{r}
+
+monitor.db <- dbConnect(MySQL(), user="ally", password="spiritai", dbname="monitor", host="freelander")
+prepare_query <- sprintf("SELECT * FROM messages WHERE from_id = '19566268';")
+max_user_sent <- dbSendQuery(monitor.db, prepare_query)
+max_user_sent <- fetch(max_user_sent, n = -1)
+remove(monitor.db)
+
+```
+
+```{r}
+
+it <- itoken(max_user_sent$body, tolower, word_tokenizer)
+vectorizer <- vocab_vectorizer(vocab, skip_grams_window = 1)
+tcm <- create_tcm(it, vectorizer)
+
+```
+```{r}
+n_topics <- 1000
+vocabulary <- vocab
+
+lda_model <- LatentDirichletAllocation$new(n_topics, vocabulary, doc_topic_prior = 1 / n_topics, topic_word_prior = 1 / n_topics)
+doc_topic_distr <- lda_model$fit(dtm, n_iter =20, check_convergence_every_n = 5)
+
+word_vectors <- lda_model$get_word_vectors()
+
+```
+
+```{r}
+lda_model$plot()
 
 ```
 
